@@ -1,0 +1,67 @@
+app-id: com.usepaperpilot.PaperPilot
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: paperpilot-desktop
+finish-args:
+  # Graphical display access
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  # GPU acceleration
+  - --device=dri
+  # File access to user documents and downloads
+  - --filesystem=xdg-download
+  - --filesystem=xdg-documents
+  # Sandboxed network access (for local MCP/AI service communication)
+  - --share=network
+
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node22
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node22/bin
+  env:
+    CARGO_HOME: /run/build/paperpilot/cargo
+    CARGO_NET_OFFLINE: 'true'
+
+modules:
+  - name: paperpilot
+    buildsystem: simple
+    build-commands:
+      # Enable pnpm via Node 22 Corepack to a local bin directory in PATH
+      - mkdir -p /run/build/paperpilot/bin
+      - corepack enable --install-directory /run/build/paperpilot/bin pnpm || true
+      - export PATH=/run/build/paperpilot/bin:$PATH
+
+      # Populate pnpm store offline and configure npm/pnpm
+      - python3 flatpak-node/populate_pnpm_store.py flatpak-node/pnpm-manifest.json flatpak-node/pnpm-tarballs flatpak-node/pnpm-store
+      - echo "store-dir=$PWD/flatpak-node/pnpm-store" >> apps/desktop/.npmrc
+
+      # Build frontend
+      - cd apps/desktop && pnpm install --offline --frozen-lockfile && pnpm run build && cd ../..
+
+      # Configure Cargo offline vendoring for PaperPilot workspace
+      - mkdir -p .cargo
+      - cp cargo/config .cargo/config.toml
+
+      # Build PaperPilot Tauri desktop binary from source with MANDATORY -j 4 constraint
+      - cargo build -p desktop --bin desktop --release -j 4
+
+      # Install binary
+      - install -D -m 755 target/release/desktop /app/bin/paperpilot-desktop
+
+      # Install desktop launcher, icons, and metainfo from source tree
+      - install -D -m 644 apps/desktop/src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/com.usepaperpilot.PaperPilot.png
+      - install -D -m 644 apps/desktop/src-tauri/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/com.usepaperpilot.PaperPilot.png
+      - install -D -m 644 packaging/flatpak/com.usepaperpilot.PaperPilot.desktop /app/share/applications/com.usepaperpilot.PaperPilot.desktop
+      - install -D -m 644 packaging/flatpak/com.usepaperpilot.PaperPilot.metainfo.xml /app/share/metainfo/com.usepaperpilot.PaperPilot.metainfo.xml
+
+    sources:
+      - type: archive
+        url: https://github.com/KrushnaVardhanReddy/PaperPilot/archive/refs/tags/v0.8.1.tar.gz
+        sha256: bc9a77bfc843b4e3542066b9d2f192898fca7578a0958d3d0ebb934f31d72e6c
+
+      - cargo-sources.json
+      - node-sources.json
